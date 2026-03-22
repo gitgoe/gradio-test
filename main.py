@@ -8,8 +8,71 @@ import os
 import tempfile
 from cachetools import cached, TTLCache
 import json
+from json import dumps
+import requests
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="seaborn")
+
+def call_web_service(endpoint, api_key=None, data=None):
+    """
+    Call a secure web service and return the response
+
+    Args:
+        endpoint (str): The HTTPS URL of the web service
+        api_key (str, optional): API key for authentication
+        data (dict, optional): Data to send in the request body
+
+    Returns:
+        str: Response from the web service or error message
+    """
+    try:
+        # Prepare headers
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Gradio-Web-Client/1.0'
+        }
+
+        # Add authentication if API key provided
+        if api_key:
+            headers['Authorization'] = f'Bearer {api_key}'
+            # Alternative: headers['X-API-Key'] = api_key
+
+        # Make the HTTP request
+        if data:
+            # POST request with data
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=data,
+                timeout=30,
+                verify=True  # Verify SSL certificate (secure)
+            )
+        else:
+            # GET request
+            response = requests.get(
+                endpoint,
+                headers=headers,
+                timeout=30,
+                verify=True  # Verify SSL certificate (secure)
+            )
+
+        # Check if request was successful
+        if response.status_code == 200:
+            try:
+                return json.dumps(response.json(), indent=2)
+            except:
+                return response.text
+        else:
+            return f"Error {response.status_code}: {response.text}"
+
+    except requests.exceptions.SSLError:
+        return "SSL Error: The service's SSL certificate is not valid"
+    except requests.exceptions.Timeout:
+        return "Timeout: The request took too long to complete"
+    except requests.exceptions.ConnectionError:
+        return "Connection Error: Could not connect to the service"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 # ------------------------------------------------------------------
 # 1) Load CSV data once
@@ -27,8 +90,26 @@ def load_json_data():
         json_data = json_data.drop(columns=['applicationOD','applicationGroupOD','streamWeaverScriptName','indexKey','refDocList','streamWeaverEngine','serviceName','docType','nbrOfCopies','dialogueEngine','recipients'])
         json_data.insert(len(json_data.columns), 'selected', False)
         print(json_data)
+def load_json_data_ws():
+    global json_data
+    try:
+        json_string =  call_web_service("http://127.0.0.1:8000/", "")
+        raw_json_data = json.loads(json_string)['data']
+        print(raw_json_data)
+        json_attributes = [item['attributes'] for item in raw_json_data]
+        print(json_attributes[0])
+        json_data = pd.json_normalize(json_attributes)
+        json_data = json_data.drop(
+            columns=['applicationOD', 'applicationGroupOD', 'streamWeaverScriptName', 'indexKey', 'refDocList',
+                     'streamWeaverEngine', 'serviceName', 'docType', 'nbrOfCopies', 'dialogueEngine', 'recipients'])
+        json_data.insert(len(json_data.columns), 'selected', False)
+    except json.JSONDecodeError as e:
+        print('Error:', e)
+        print('The JSON string is not properly formatted')
 
-load_json_data()
+
+# load_json_data()
+load_json_data_ws()
 
 cache = TTLCache(maxsize=128, ttl=300)
 
@@ -40,7 +121,6 @@ def get_date_range():
 
 def update_dashboard(start_date, end_date):
     table_data = json_data
-
     return (table_data)
 
 
@@ -90,6 +170,13 @@ def create_dashboard():
             value=json_data,
             interactive=True,
             datatype=["str", "str","str", "str","str", "str","str", "bool"]
+        )
+
+
+        refresh_btn = gr.Button('🔄 Refresh Data', variant='primary')
+        refresh_btn.click(
+            fn=load_json_data_ws(),
+            outputs=[data_table]
         )
 
         btn = gr.Button("Get selected")
